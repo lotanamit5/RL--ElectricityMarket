@@ -1,0 +1,6 @@
+gymnasium
+torch
+pyvirtualdisplay
+pandas
+numpy
+matplotlib
