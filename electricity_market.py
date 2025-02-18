@@ -18,62 +18,90 @@ from periodic import PeriodicFunction, PeriodicTwoGaussianSum
 
 class ElectricityMarketEnv(gym.Env):
     """
-    #TODO
+    A reinforcement learning environment modeling an electricity market where an agent 
+    manages a battery storage system to maximize profit while meeting household demand.
+
+    ## State Space:
+    - **State of Charge (SoC):** Battery charge in [0, capacity].
+    - **Demand (Dt):** Periodic electricity demand with stochastic noise.
+    - **Price (Pt):** Periodic market price with stochastic noise.
+
+    ## Action Space:
+    - A single continuous value in [-capacity, capacity], representing charge (positive) or discharge (negative).
+
+    ## Reward Function:
+    - **Discharge (action < 0):** First meets demand; surplus energy is sold to the grid at Pt.
+    - **Charge (action > 0):** Battery is charged, incurring a cost based on (charge + demand) * Pt.
+
+    ## Episode Termination:
+    - Fixed horizon (number of timesteps).
+    - An attempt to step beyond the horizon raises an error.
+
+    ## Parameters:
+    - `capacity` (float): Battery capacity.
+    - `horizon` (int): Number of timesteps per episode.
+    - `demand_fn`, `price_fn` (PeriodicFunction, optional): Functions modeling demand and price.
+    - `render_mode` (str): One of ["console", "human", "debug", "none].
+    - `seed` (int, optional): Random seed for reproducibility.
+
+    ## Example:
+        ```python
+        env = ElectricityMarketEnv(capacity=100, horizon=100, seed=42)
+        obs, _ = env.reset()
+        action = env.action_space.sample()  # Sampled action
+        obs, reward, terminated, truncated, _ = env.step(action)
+        env.render()  # Display state
+        ```
     """
+    
+    _render_modes = ["console", "human", "debug", "none"]
+    
     def __init__(self, capacity: float,
                  horizon: int = 100,
                  demand_fn: PeriodicFunction = None,
                  price_fn: PeriodicFunction = None,
-                 render_mode: str = "console",
+                 render_mode: str = "none",
                  seed: int = None):
         self.render_mode = render_mode
         
-        assert isinstance(capacity, (int, float)), "The capacity should be a number"
-        assert capacity > 0, "The capacity should be greater than 0"
-        assert isinstance(horizon, int), "The horizon should be an integer"
-        assert horizon > 0, "The horizon should be greater than 0"
-        assert render_mode in ["console"], "Only console render mode is supported"
-        assert seed is None or isinstance(seed, int), "The seed should be an integer"
-        assert demand_fn is None or isinstance(demand_fn, PeriodicFunction), "The demand function should inherit from PeriodicFunction"
-        assert price_fn is None or isinstance(price_fn, PeriodicFunction), "The price function should inherit from PeriodicFunction"
+        assert isinstance(capacity, (int, float)), f"The capacity should be a number, got {type(capacity)}"
+        assert capacity > 0, f"The capacity should be greater than 0, got {capacity}"
+        assert isinstance(horizon, int), f"The horizon should be an integer, got {type(horizon)}"
+        assert horizon > 0, f"The horizon should be greater than 0, got {horizon}"
+        assert render_mode in self._render_modes, f"Only {', '.join(self._render_modes)} render mode/s are supported, got {render_mode}"
+        assert seed is None or isinstance(seed, int), f"The seed should be an integer, got {type(seed)}"
+        assert demand_fn is None or isinstance(demand_fn, PeriodicFunction), f"The demand function should inherit from PeriodicFunction, got {type(demand_fn)}"
+        assert price_fn is None or isinstance(price_fn, PeriodicFunction), f"The price function should inherit from PeriodicFunction, got {type(price_fn)}"
+        
         demand_fn = demand_fn or PeriodicTwoGaussianSum.from_seed(horizon, seed=seed)
         price_fn = price_fn or PeriodicTwoGaussianSum.from_seed(horizon, seed=seed+1 if seed else None)
 
         # Initialize the state of charge
         self._capacity = capacity
         self._timestep = 0
-        self._state_of_charge = 0
-        self._demand = None
-        self._price = None
+        self._state_of_charge = 0.
+        self._demand = demand_fn
+        self._price = price_fn
         self._horizon = horizon
         
-        self.action_space = spaces.Box(low=-self._capacity, high=self._capacity, shape=(), dtype=float)
-        # TODO: find a way to make the space in [0,1] instead of [0, inf)
-        self.observation_space = spaces.Dict({
-            "state_of_charge": spaces.Box(low=0, high=self._capacity, shape=(1,), dtype=np.float32),
-            "demand": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),
-            "price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)
-        })
+        # TODO: Normalize to [-1, 1]
+        self.action_space = spaces.Box(low=-self._capacity, high=self._capacity, shape=(), dtype=np.float32)
+        # TODO: find a way to make the space in [0,1] instead of [0, inf), define P_max and D_max
+        self.observation_space = spaces.Box(
+            low=np.array([0., 0., 0.]), 
+            high=np.array([self._capacity, np.inf, np.inf]),
+            shape=(3,), dtype=np.float32
+        )
+        self.render()
     
     def _get_obs(self):
-        return {
-            "state_of_charge": self._state_of_charge,
-            "demand": self._demand[self._timestep],
-            "price": self._price[self._timestep]
-        }
+        return np.asarray([self._state_of_charge, self._demand[self._timestep], self._price[self._timestep]], dtype=np.float32)
 
-    def reset(self, seed=None):
-        """
-        Important: the observation must be a numpy array
-        :return: (np.array)
-        """
+    def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        # Initialize the agent at the right of the grid
-        self._state_of_charge = 0
+        self._state_of_charge = 0.
         self._timestep = 0
-        self._demand = PeriodicTwoGaussianSum.from_seed(self._horizon, seed=seed)
-        self._price = PeriodicTwoGaussianSum.from_seed(self._horizon, seed=seed+1 if seed else None)
-        
+        self.render()
         return self._get_obs(), {}  # empty info dict
 
     def step(self, action: float):
@@ -84,18 +112,27 @@ class ElectricityMarketEnv(gym.Env):
         if self._timestep >= self._horizon:
             raise ValueError("Episode is terminated, please reset the environment")
         
+        demand = self._demand[self._timestep]
+        price = self._price[self._timestep]
+        
         if action < 0: # discharge
-            print("SoC", self._state_of_charge)
-            print("action", action)
-            discharge = max(self._state_of_charge, -action) # can not discharge more than SoC
-            reward = (discharge - self._demand[self._timestep]) * self._price[self._timestep]
-        
+            discharge = min(self._state_of_charge, -action) # can not discharge more than SoC
+            
+            self._state_of_charge -= discharge
+            
+            # discharge - demand > 0 -> we have leftovers to sell
+            # discharge - demand < 0 -> we need to buy extra units to satisfy demand
+            reward = (discharge - demand) * price
+       
         else: # charge
-            reward = 0
+            charge = min(self._capacity - self._state_of_charge, action) # can not charge more than the capacity
+            
+            self._state_of_charge += charge
+            
+            reward = -(charge + demand) * price
         
-        # Update the state of charge
-        self._state_of_charge = np.clip(self._state_of_charge + action, 0, self._capacity)
-
+        self.render()
+        
         # Update the timestep to return the next observation
         self._timestep += 1
 
@@ -108,13 +145,26 @@ class ElectricityMarketEnv(gym.Env):
         )
 
     def render(self):
-        print(__name__)
-        print(f"State of Charge: {self._state_of_charge}")
-        print(f"Demand: {self._demand[self._timestep]}")
-        print(f"Price: {self._price[self._timestep]}")
+        if self.render_mode == 'none':
+            return
+        if self.render_mode == 'human':
+            self._render_human()
+        elif self.render_mode == 'console':
+            print(f"State of Charge: {self._state_of_charge}")
+            print(f"Demand: {self._demand[self._timestep]}")
+            print(f"Price: {self._price[self._timestep]}")
 
     def close(self):
         pass
+    
+    def _render_human(self):
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(12, 8))
+        obs = self._get_obs()
+        
+        plt.bar(obs.keys(), obs.values())
+        plt.show()
+        
 
 if __name__ == "__main__":
     num_steps = 100
@@ -129,9 +179,10 @@ if __name__ == "__main__":
     for idx in range(num_steps):
         action = env.action_space.sample()
         next_obs, reward, terminated, truncated, _ = env.step(action)
-        SoCs.append(next_obs["state_of_charge"])
-        demands.append(next_obs["demand"])
-        prices.append(next_obs["price"])
+        SoC, demand, price = next_obs
+        SoCs.append(SoC)
+        demands.append(demand)
+        prices.append(price)
         total_reward += reward
         obs = next_obs
         if terminated or truncated:
