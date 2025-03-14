@@ -66,8 +66,8 @@ class ElectricityMarketEnv(gym.Env):
                  demand_fn: callable = demand_default_fn,
                  price_fn: callable = price_default_fn,
                  render_mode: str = "none",
-                 seed: int = None,
                  noisy=True):
+        super().__init__()
         self.render_mode = render_mode
         
         assert isinstance(capacity, (int, float)), f"The capacity should be a number, got {type(capacity)}"
@@ -77,7 +77,6 @@ class ElectricityMarketEnv(gym.Env):
         assert callable(demand_fn), f"The demand function should be callable, got {type(demand_fn)}"
         assert callable(price_fn), f"The price function should be callable, got {type(price_fn)}"
         assert render_mode in self._render_modes, f"Only {', '.join(self._render_modes)} render mode/s are supported, got {render_mode}"
-        assert seed is None or isinstance(seed, int), f"The seed should be an integer, got {type(seed)}"
         
         self._demand_fn = demand_fn if not noisy else NormalNoiseWrapper(demand_fn, scale=DEMAND_STD)
         self._price_fn = price_fn if not noisy else NormalNoiseWrapper(price_fn, scale=PRICE_STD)
