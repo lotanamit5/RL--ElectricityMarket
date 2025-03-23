@@ -78,12 +78,18 @@ class ElectricityMarketEnv(gym.Env):
         assert callable(price_fn), f"The price function should be callable, got {type(price_fn)}"
         assert render_mode in self._render_modes, f"Only {', '.join(self._render_modes)} render mode/s are supported, got {render_mode}"
         
-        self._demand_fn = demand_fn if not noisy else NormalNoiseWrapper(demand_fn, scale=DEMAND_STD)
-        self._price_fn = price_fn if not noisy else NormalNoiseWrapper(price_fn, scale=PRICE_STD)
+        self._noisy = noisy
         self._capacity = capacity
         self._timestep = 0
         self._state_of_charge = 0.
         self._horizon = horizon
+        
+        self._demand_fn = demand_fn #if not noisy else NormalNoiseWrapper(demand_fn, scale=DEMAND_STD)
+        self._price_fn = price_fn #if not noisy else NormalNoiseWrapper(price_fn, scale=PRICE_STD)
+        self.demand = self._demand_fn if not self._noisy else NormalNoiseWrapper(self._demand_fn, scale=DEMAND_STD)
+        self.price = self._price_fn if not self._noisy else NormalNoiseWrapper(self._price_fn, scale=PRICE_STD)
+        
+        self._demand_from_grid = []
         
         self.action_space = spaces.Box(low=-self._capacity, high=self._capacity, shape=(), dtype=np.float32)
         self.observation_space = spaces.Box(
@@ -94,12 +100,13 @@ class ElectricityMarketEnv(gym.Env):
         self.render()
     
     def _get_obs(self):
-        return np.asarray([self._state_of_charge, self._demand_fn(self._timestep), self._price_fn(self._timestep)], dtype=np.float32)
+        return np.asarray([self._state_of_charge, self.demand(self._timestep), self.price(self._timestep)], dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self._state_of_charge = 0.
         self._timestep = 0
+        self._demand_from_grid = []
         self.render()
         return self._get_obs(), {}  # empty info dict
 
@@ -111,24 +118,31 @@ class ElectricityMarketEnv(gym.Env):
         if self._timestep >= self._horizon:
             raise ValueError("Episode is terminated, please reset the environment")
         
-        demand = self._demand_fn(self._timestep)
-        price = self._price_fn(self._timestep)
+        # print(f"[Env] Time: {self._timestep}")
+        # print(f"[Env] Action: {action}")
+        demand = self.demand(self._timestep)
+        # print(f"[Env] Demand: {demand}")
+        price = self.price(self._timestep)
         
         if action < 0: # discharge
             discharge = min(self._state_of_charge, -action) # can not discharge more than SoC
-            
+            # print(f"[Env] Discharge: {discharge}")
             self._state_of_charge -= discharge
             
             # discharge - demand > 0 -> we have leftovers to sell
             # discharge - demand < 0 -> we need to buy extra units to satisfy demand
+            self._demand_from_grid.append(max(0, demand - discharge))
             reward = (discharge - demand) * price
        
         else: # charge
             charge = min(self._capacity - self._state_of_charge, action) # can not charge more than the capacity
+            # print(f"[Env] Charge: {charge}")
             
             self._state_of_charge += charge
             
+            self._demand_from_grid.append(charge + demand)
             reward = -(charge + demand) * price
+        # print(f"[Env] Demand from grid: {self._demand_from_grid[-1]}")
         
         self.render()
         
@@ -150,8 +164,8 @@ class ElectricityMarketEnv(gym.Env):
             self._render_human()
         elif self.render_mode == 'console':
             print(f"State of Charge: {self._state_of_charge}")
-            print(f"Demand: {self._demand_fn(self._timestep)}")
-            print(f"Price: {self._price_fn(self._timestep)}")
+            print(f"Demand: {self.demand(self._timestep)}")
+            print(f"Price: {self.price(self._timestep)}")
 
     def close(self):
         pass
@@ -167,110 +181,10 @@ class ElectricityMarketEnv(gym.Env):
         plt.title(f"SoC: {soc:.2f}")
         plt.show()
 
-# class NormalizeWrapper(gym.Wrapper):
-#     """
-#     :param env: (gym.Env) Gym environment that will be wrapped
-#     """
-
-#     def __init__(self, env: ElectricityMarketEnv):
-#         if not isinstance(env, ElectricityMarketEnv):
-#             try:
-#                 env = env.env
-#             except AttributeError:
-#                 raise ValueError("This wrapper only works with ElectricityMarketEnv environments")
-        
-#         # Retrieve the action space
-#         action_space = env.action_space
-#         assert isinstance(
-#             action_space, gym.spaces.Box
-#         ), "This wrapper only works with continuous action space (spaces.Box)"
-#         # Retrieve the max/min values
-#         self.action_low, self.action_high = action_space.low, action_space.high
-        
-#         obs_space = env.observation_space
-#         assert isinstance(
-#             obs_space, gym.spaces.Box
-#         ), "This wrapper only works with continuous observation space (spaces.Box)"
-        
-#         demand = [env._demand[t] for t in range(env._horizon)]
-#         price = [env._price[t] for t in range(env._horizon)]
-#         self.demand_low, self.demand_high = 0, max(demand)
-#         self.price_low, self.price_high = 0, max(price)
-#         self.soc_low, self.soc_high = 0, env._capacity
-
-#         # We modify the action space, so all actions will lie in [-1, 1]
-#         env.action_space = gym.spaces.Box(
-#             low=-1, high=1, shape=action_space.shape, dtype=np.float32
-#         )
-        
-#         # We modify the observation space, so all observations will lie in [0, 1] for each dimension
-#         env.observation_space = gym.spaces.Box(
-#             low=0, high=1, shape=obs_space.shape, dtype=np.float32
-#         )
-        
-#         self.reward_low = -(self.action_high + self.demand_high) * self.price_high
-#         self.reward_high = (self.action_high - self.demand_low) * self.price_high
-
-#         # Call the parent constructor, so we can access self.env later
-#         super(NormalizeWrapper, self).__init__(env)
-
-#     def rescale_action(self, scaled_action):
-#         """
-#         Rescale the action from [-1, 1] to [low, high]
-#         (no need for symmetric action space)
-#         :param scaled_action: (np.ndarray)
-#         :return: (np.ndarray)
-#         """
-#         return self.action_low + (0.5 * (scaled_action + 1.0) * (self.action_high - self.action_low))
-    
-#     def scale_observation(self, obs):
-#         soc, demand, price = obs
-        
-#         # Normalize the observation and reward
-#         soc = (soc - self.soc_low) / (self.soc_high - self.soc_low)
-#         demand = (demand - self.demand_low) / (self.demand_high - self.demand_low)
-#         price = (price - self.price_low) / (self.price_high - self.price_low)
-#         return np.array([soc, demand, price], dtype=np.float32)
-
-#     def scale_reward(self, reward):
-#         reward = 2 * (reward - self.reward_low) / (self.reward_high - self.reward_low) - 1
-#         return reward
-    
-#     def rescale_observation(self, obs):
-#         soc, demand, price = obs
-#         soc = soc * (self.soc_high - self.soc_low) + self.soc_low
-#         demand = demand * (self.demand_high - self.demand_low) + self.demand_low
-#         price = price * (self.price_high - self.price_low) + self.price_low
-#         return np.array([soc, demand, price], dtype=np.float32)
-    
-#     def rescale_reward(self, reward):
-#         reward = 0.5 * (reward + 1) * (self.reward_high - self.reward_low) + self.reward_low
-#         return reward
-
-#     def reset(self, **kwargs):
-#         """
-#         Reset the environment
-#         """
-#         return self.env.reset(**kwargs)
-
-#     def step(self, action):
-#         """
-#         :param action: ([float] or int) Action taken by the agent
-#         :return: (np.ndarray, float,bool, bool, dict) observation, reward, terminated? truncated?, additional informations
-#         """
-#         # Rescale action from [-1, 1] to original [low, high] interval
-#         rescaled_action = self.rescale_action(action)
-#         obs, reward, terminated, truncated, info = self.env.step(rescaled_action)
-        
-#         # Normalize the observation and reward
-#         obs = self.scale_observation(obs)
-#         reward = self.scale_reward(reward)
-        
-#         return obs, reward, terminated, truncated, info   
-
-# if __name__ == "__main__":
-    # num_steps = 100
-    # env = ElectricityMarketEnv(capacity=100, horizon=num_steps)
+if __name__ == "__main__":
+    num_steps = 100
+    env = ElectricityMarketEnv()
+    print(env.action_space.shape)
     # # If the environment don't follow the interface, an error will be thrown
     # # check_env(env, warn=True, skip_render_check=True)
     # obs, _ = env.reset()
