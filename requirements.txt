@@ -1,8 +1,11 @@
-gymnasium
-torch
 pyvirtualdisplay
+torch
 pandas
 numpy
 matplotlib
+seaborn
+scipy
+tensorboard
+gymnasium
 rl_zoo3
 stable-baselines3
