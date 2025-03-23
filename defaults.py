@@ -11,6 +11,7 @@ PRICE_STD = 0.31
 
 @staticmethod
 def _days_in_month(month):
+    assert 1 <= month <= 12
     _days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     return _days_per_month[month - 1]
 
@@ -50,6 +51,10 @@ def demand_default_fn(t):
 def _demand_default_fn(hour, day, month):
     # Data taken from https://fs.knesset.gov.il/globaldocs/MMM/5f43840b-bf74-ed11-8150-005056aac6c3/2_5f43840b-bf74-ed11-8150-005056aac6c3_11_19876.pdf
     # And scaled to my personal average monthly consumption, averaged over 2023-2024.
+    assert 0 <= hour <= 23
+    assert 1 <= day <= 31
+    assert 1 <= month <= 12
+    
     _IL_avg_monthly_demand_per_month = [
         291.8669571 , 241.28077231, 244.95976757, 198.05257803,
         210.77576997, 249.09863723, 353.64341914, 373.41801864,
