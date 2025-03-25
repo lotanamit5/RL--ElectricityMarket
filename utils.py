@@ -3,6 +3,19 @@ import torch
 from torch.distributions import Normal
 from contextlib import contextmanager
 
+class NormalNoiseWrapper():
+    def __init__(self, func: callable,
+                 loc=0, scale=1):
+        assert callable(func)
+        self.func = func
+        self.noise = Normal(loc=loc, scale=scale)
+        self.random_state = torch.randint(0, 10000, (1,)).item()
+    
+    def __call__(self, t):
+        with torch_temporary_seed(self.random_state + t):
+            noise_val = self.noise.sample().item()
+        return max(self.func(t) + noise_val, self.func(t) * 0.1)
+
 
 @contextmanager
 def torch_temporary_seed(seed: int):
@@ -20,17 +33,3 @@ def torch_temporary_seed(seed: int):
             yield
         finally:
             torch.random.set_rng_state(state)
-
-class NormalNoiseWrapper():
-    def __init__(self, func: callable,
-                 loc=0, scale=1):
-        assert callable(func)
-        self.func = func
-        self.noise = Normal(loc=loc, scale=scale)
-    
-    def __call__(self, *args, **kwds):
-        val =  self.func(*args) + self.noise.sample().item()
-        if val < 0:
-            val = 1e-3
-        return val
-

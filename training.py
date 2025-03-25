@@ -1,8 +1,6 @@
 import os
-import numpy as np
-from stable_baselines3 import PPO, SAC, A2C, DDPG, TD3
+from stable_baselines3 import PPO, A2C
 from stable_baselines3.common.callbacks import EvalCallback
-from stable_baselines3.common.noise import NormalActionNoise
 from make_env import make_env
 import argparse
 
@@ -10,16 +8,8 @@ def make_model(model_name, env):
     model_name = model_name.upper()
     if model_name == "PPO":
         return PPO(policy="MlpPolicy", env=env)
-    elif model_name == "SAC":
-        return SAC(policy="MlpPolicy", env=env)
     elif model_name == "A2C":
         return A2C(policy="MlpPolicy", env=env)
-    elif model_name == "DDPG":
-        action_noise = NormalActionNoise(mean=np.zeros(1), sigma=0.1 * np.ones(1))
-        return DDPG(policy="MlpPolicy", env=env, action_noise=action_noise)
-    elif model_name == "TD3":
-        action_noise = NormalActionNoise(mean=np.zeros(1), sigma=0.1 * np.ones(1))
-        return TD3(policy="MlpPolicy", env=env)
     else:
         raise ValueError(f"Unknown model: {model_name}")
 

@@ -7,18 +7,6 @@ from defaults import (demand_default_fn, price_default_fn,
                       DEMAND_STD, PRICE_STD)
 from utils import NormalNoiseWrapper
 
-# Define the Environment: The environment models the electricity market. Implement the following components:
-# • State Variables: Define the state space including SoC (State of Charge), Dt
-# (electricity demand), and Pt (electricity price).
-# • Dynamics: Model the stochastic evolution of the market price (Pt) and demand
-# (Dt). The market price and demand should both be periodic functions with two
-# ”peaks”. Both functions should be noisy, meaning that a random noise should
-# be added to the function value at each timestep. An example of the demand
-# function could be a combination of two normal distributions. For example: 
-# $$ f(x) = 100 \cdot e^\frac{−(x−0.4)^2}{2 \cdot (0.05)^2} + 120 \cdot e^\frac{−(x−0.7)^2}{2 \cdot (0.1)^2}
-# • Reward Function: Design a reward function to maximize profits while meeting
-# household demand
-
 class ElectricityMarketEnv(gym.Env):
     """
     A reinforcement learning environment modeling an electricity market where an agent 
@@ -47,18 +35,9 @@ class ElectricityMarketEnv(gym.Env):
     - `render_mode` (str): One of ["console", "human", "debug", "none"].
     - `seed` (int, optional): Random seed for reproducibility.
     - `noisy` (bool): Whether to add noise to demand and price functions.
-
-    ## Example:
-        ```python
-        env = ElectricityMarketEnv(capacity=100, horizon=100, seed=42)
-        obs, _ = env.reset()
-        action = env.action_space.sample()  # Sampled action
-        obs, reward, terminated, truncated, _ = env.step(action)
-        env.render()  # Display state
-        ```
     """
     
-    _render_modes = ["console", "human", "debug", "none"]        
+    _render_modes = ["console", "debug", "none"]        
     
     def __init__(self,
                  capacity: float = DEFAULT_BATTERY_CAPACITY,
@@ -84,8 +63,8 @@ class ElectricityMarketEnv(gym.Env):
         self._state_of_charge = 0.
         self._horizon = horizon
         
-        self._demand_fn = demand_fn #if not noisy else NormalNoiseWrapper(demand_fn, scale=DEMAND_STD)
-        self._price_fn = price_fn #if not noisy else NormalNoiseWrapper(price_fn, scale=PRICE_STD)
+        self._demand_fn = demand_fn
+        self._price_fn = price_fn
         self.demand = self._demand_fn if not self._noisy else NormalNoiseWrapper(self._demand_fn, scale=DEMAND_STD)
         self.price = self._price_fn if not self._noisy else NormalNoiseWrapper(self._price_fn, scale=PRICE_STD)
         
@@ -100,13 +79,18 @@ class ElectricityMarketEnv(gym.Env):
         self.render()
     
     def _get_obs(self):
-        return np.asarray([self._state_of_charge, self.demand(self._timestep), self.price(self._timestep)], dtype=np.float32)
+        return np.asarray([self._state_of_charge, 
+                           self.demand(self._timestep), 
+                           self.price(self._timestep)], 
+                          dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self._state_of_charge = 0.
         self._timestep = 0
         self._demand_from_grid = []
+        self.demand = self._demand_fn if not self._noisy else NormalNoiseWrapper(self._demand_fn, scale=DEMAND_STD)
+        self.price = self._price_fn if not self._noisy else NormalNoiseWrapper(self._price_fn, scale=PRICE_STD)
         self.render()
         return self._get_obs(), {}  # empty info dict
 
@@ -115,18 +99,14 @@ class ElectricityMarketEnv(gym.Env):
             raise ValueError(
                 f"Action must be between -{self._capacity} and {self._capacity}"
             )
-        if self._timestep >= self._horizon:
+        if self._timestep > self._horizon:
             raise ValueError("Episode is terminated, please reset the environment")
         
-        # print(f"[Env] Time: {self._timestep}")
-        # print(f"[Env] Action: {action}")
         demand = self.demand(self._timestep)
-        # print(f"[Env] Demand: {demand}")
         price = self.price(self._timestep)
         
         if action < 0: # discharge
             discharge = min(self._state_of_charge, -action) # can not discharge more than SoC
-            # print(f"[Env] Discharge: {discharge}")
             self._state_of_charge -= discharge
             
             # discharge - demand > 0 -> we have leftovers to sell
@@ -136,21 +116,18 @@ class ElectricityMarketEnv(gym.Env):
        
         else: # charge
             charge = min(self._capacity - self._state_of_charge, action) # can not charge more than the capacity
-            # print(f"[Env] Charge: {charge}")
-            
             self._state_of_charge += charge
             
             self._demand_from_grid.append(charge + demand)
             reward = -(charge + demand) * price
-        # print(f"[Env] Demand from grid: {self._demand_from_grid[-1]}")
         
         self.render()
-        
+
         # Update the timestep to return the next observation
         self._timestep += 1
-
+        
         return (
-            self._get_obs(),
+            self._get_obs(), # Next observations
             reward,
             False, # terminated
             self._timestep == self._horizon, # truncated
@@ -160,8 +137,6 @@ class ElectricityMarketEnv(gym.Env):
     def render(self):
         if self.render_mode == 'none':
             return
-        if self.render_mode == 'human':
-            self._render_human()
         elif self.render_mode == 'console':
             print(f"State of Charge: {self._state_of_charge}")
             print(f"Demand: {self.demand(self._timestep)}")
@@ -170,37 +145,8 @@ class ElectricityMarketEnv(gym.Env):
     def close(self):
         pass
     
-    def _render_human(self):
-        import matplotlib.pyplot as plt
-        plt.figure(figsize=(2, 6))
-        soc, demand, price = self._get_obs()
-        plt.bar([0], [soc], color='g', alpha=0.5)
-        plt.ylim(0, self._capacity)
-        plt.yticks(np.array([0, 0.25, 0.5, 0.75, 1])*self._capacity, labels=['0%', '25%', '50%', '75%', '100%'])
-        plt.xticks([])
-        plt.title(f"SoC: {soc:.2f}")
-        plt.show()
 
 if __name__ == "__main__":
     num_steps = 100
     env = ElectricityMarketEnv()
     print(env.action_space.shape)
-    # # If the environment don't follow the interface, an error will be thrown
-    # # check_env(env, warn=True, skip_render_check=True)
-    # obs, _ = env.reset()
-    # terminated, truncated = False, False
-    # total_reward = 0
-    # SoCs, demands, prices = [], [], []
-
-    # for idx in range(num_steps):
-    #     action = env.action_space.sample()
-    #     next_obs, reward, terminated, truncated, _ = env.step(action)
-    #     SoC, demand, price = next_obs
-    #     SoCs.append(SoC)
-    #     demands.append(demand)
-    #     prices.append(price)
-    #     total_reward += reward
-    #     obs = next_obs
-    #     if terminated or truncated:
-    #         break
-    

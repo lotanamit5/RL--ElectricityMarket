@@ -1,6 +1,3 @@
-import numpy as np
-
-
 DEFAULT_BATTERY_CAPACITY = 50 # kWh, Data taken from https://kedmasolar.com/storage/
 
 HOURS_A_YEAR = 8760
@@ -21,14 +18,13 @@ def _timestamp_to_date(t):
     Convert an environment timestep (integer) to hour, day, and month.
     Assumes a 'regular' year starting on January 1st at 00:00.
     Parameters:
-    - t (int): timestep.
+    - t (int): timestep. t>=1
 
     Outputs:
     - hour (int): Hour of the day, [0-23].
     - day (int): Day of the month, [1-31].
     - month (int): Month of the year, [1-12].
     """
-    
     hour = t % 24
     total_days = t // 24
     
@@ -85,7 +81,7 @@ def _price_default_fn(hour, day, month):
     return price
 
 if __name__ == "__main__":
-    demands = [demand_default_fn(t) for t in range(HOURS_A_YEAR)]
-    prices = [price_default_fn(t) for t in range(HOURS_A_YEAR)]
-    print(f"Demand stats: {np.mean(demands):.2f} +/- {np.std(demands):.2f}")
-    print(f"Price stats: {np.mean(prices):.2f} +/- {np.std(prices):.2f}")
+    print("t=0: ",_timestamp_to_date(0))
+    print("t=1: ",_timestamp_to_date(1))
+    print("t=2: ",_timestamp_to_date(2))
+    
